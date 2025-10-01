@@ -1,0 +1,62 @@
+-- Query to Fetch Base Data with Total Job LaborHours, LaborHours Per Unit, and Total ProdStandard
+WITH JobLaborTotals AS (
+    -- CTE to calculate the total LaborHours for each JobNum
+    SELECT
+        ld.Company, -- Include Company for accurate joining
+        ld.JobNum,
+        SUM(ld.LaborHrs) AS TotalLaborHours -- Sum of LaborHrs for the Job
+    FROM
+        `warehouse-363320.Epicor10Replication.LaborDtl` AS ld
+    WHERE
+        ld.LaborHrs > 0 -- Consider only positive labor hours in the total, as per original query logic
+    GROUP BY
+        ld.Company,
+        ld.JobNum
+)
+-- Final SELECT statement
+SELECT
+    DISTINCT -- Ensures unique rows for the combination of StartDate, JobNum, ProdStandard, etc.
+    t2.StartDate,
+    t1.JobNum,
+    t5.PartNum,
+    t2.OpDesc,
+    t2.OprSeq,
+    t1.ProdStandard, -- Original per-operation ProdStandard
+    jlt.TotalLaborHours, -- Total LaborHours for the JobNum from CTE
+    t5.ProdQty,
+    -- Calculate LaborHours per unit
+    jlt.TotalLaborHours / t5.ProdQty AS LaborHoursPerUnit,
+    -- Calculate Total ProdStandard
+    -- WHERE clause ensures t1.ProdStandard > 0 and t5.ProdQty > 0.
+    -- If t5.ProdQty = 1, TotalProdStandard will be t1.ProdStandard (since X * 1 = X).
+    -- If t5.ProdQty > 1, it will be ProdStandard multiplied by ProdQty.
+    t1.ProdStandard * t5.ProdQty AS TotalProdStandard
+FROM
+    `warehouse-363320.Epicor10Replication.JobOpDtl` AS t1
+JOIN
+    `warehouse-363320.Epicor10Replication.JobOper` AS t2
+    ON t1.Company = t2.Company AND t1.JobNum = t2.JobNum AND t1.OprSeq = t2.OprSeq
+JOIN
+    `warehouse-363320.Epicor10Replication.JobHead` AS t5
+    ON t1.Company = t5.Company AND t1.JobNum = t5.JobNum
+LEFT JOIN -- Use LEFT JOIN to ensure all selected jobs/operations appear even if no labor details for CTE
+    JobLaborTotals AS jlt
+    ON t1.Company = jlt.Company AND t1.JobNum = jlt.JobNum
+JOIN
+    `warehouse-363320.Epicor10Replication.LaborDtl` AS t3
+    ON t1.Company = t3.Company AND t1.JobNum = t3.JobNum AND t1.OprSeq = t3.OprSeq
+WHERE
+    -- General filters from your original query
+    t5.PartNum IN ('PRO165LM-0310-ES18837-25', 'PRO165LM-0310-ES18837-15')
+    --AND t1.ProdStandard = 7.5
+    AND LEFT(t2.OpCode, 5) = 'M-CMP'
+    -- Filter to ensure the specific operation detail being selected has positive labor hours recorded
+    AND t3.LaborHrs > 0
+    -- Ensure needed values for the selected rows are valid
+    --AND t2.OprSeq = 11
+    AND t1.ProdStandard IS NOT NULL AND t1.ProdStandard > 0
+    AND t5.ProdQty IS NOT NULL AND t5.ProdQty > 0 -- This ensures ProdQty is at least 1
+    AND t5.PartNum != 'Prod-Service'
+    -- Note: t4.Name filters and t3.YourLaborDateColumn are not included as they are not in the final requested SELECT list or are commented out.
+    -- Adjust the date filter for t2.StartDate if needed, for example:
+    AND DATE(t2.StartDate) >= '2025-03-18';
